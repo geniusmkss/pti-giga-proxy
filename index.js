@@ -9,6 +9,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// === GIGACHAT ===
 let token = null;
 let tokenExpires = 0;
 
@@ -51,6 +52,43 @@ app.post('/ask', async (req, res) => {
     res.json({ answer: data.choices?.[0]?.message?.content || 'Не удалось ответить' });
   } catch (e) {
     console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// === ПОГОДА (Яндекс) ===
+app.get('/weather', async (req, res) => {
+  try {
+    const query = `{
+      weatherByPoint(request: { lat: 58.521, lon: 31.271 }) {
+        now {
+          temperature
+          feelsLike
+          condition
+          windSpeed
+          humidity
+        }
+      }
+    }`;
+    const r = await fetch('https://api.weather.yandex.ru/graphql/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Yandex-Weather-Key': 'aa845272-7770-42c4-81f3-02d124456eab'
+      },
+      body: JSON.stringify({ query: query })
+    });
+    const data = await r.json();
+    const now = data.data.weatherByPoint.now;
+    res.json({
+      temp: now.temperature,
+      feels: now.feelsLike,
+      code: now.condition,
+      wind: now.windSpeed,
+      humidity: now.humidity
+    });
+  } catch (e) {
+    console.error('Weather error:', e);
     res.status(500).json({ error: e.message });
   }
 });
