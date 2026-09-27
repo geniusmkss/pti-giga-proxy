@@ -2,7 +2,6 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-// CORS — разрешаем запросы с любого домена
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
@@ -12,16 +11,15 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-//  GIGACHAT — токен и запросы
+//  GIGACHAT
 // ============================================================
 let gigaToken = null;
 let gigaTokenExpires = 0;
 
 async function getGigaToken() {
   if (gigaToken && Date.now() < gigaTokenExpires) return gigaToken;
-
   const authKey = process.env.GIGACHAT_AUTH_KEY;
-  if (!authKey) throw new Error('GIGACHAT_AUTH_KEY не задан в переменных окружения');
+  if (!authKey) throw new Error('GIGACHAT_AUTH_KEY не задан');
 
   const r = await fetch('https://ngw.devices.sberbank.ru:9443/api/v2/oauth', {
     method: 'POST',
@@ -40,8 +38,7 @@ async function getGigaToken() {
   }
 
   const data = await r.json();
-  if (!data.access_token) throw new Error('Нет access_token в ответе GigaChat');
-
+  if (!data.access_token) throw new Error('Нет access_token');
   gigaToken = data.access_token;
   gigaTokenExpires = Date.now() + (data.expires_at * 1000) - 60000;
   return gigaToken;
@@ -50,26 +47,15 @@ async function getGigaToken() {
 app.post('/ask', async (req, res) => {
   try {
     const { message, context } = req.body;
-    if (!message || typeof message !== 'string') {
-      return res.status(400).json({ error: 'Пустое сообщение' });
-    }
-    if (message.length > 500) {
-      return res.status(400).json({ error: 'Сообщение слишком длинное (макс. 500)' });
-    }
+    if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Пустое сообщение' });
+    if (message.length > 500) return res.status(400).json({ error: 'Слишком длинное' });
 
     const token = await getGigaToken();
-
-    const systemPrompt = `Ты ИИ-помощник студенческого портала ПТИ НовГУ (Политехнический институт, Великий Новгород).
-Отвечай кратко, дружелюбно, на русском языке. Помогай с расписанием, аудиториями, преподавателями.
-Если вопрос не про учёбу — вежливо верни разговор к расписанию.
-Данные о расписании студента: ${context || 'не передано'}`;
+    const systemPrompt = `Ты ИИ-помощник студенческого портала ПТИ НовГУ (Политехнический институт, Великий Новгород). Отвечай кратко, дружелюбно, на русском. Помогай с расписанием, аудиториями, преподавателями. Если вопрос не про учёбу — вежливо верни к расписанию. Данные: ${context || 'не передано'}`;
 
     const r = await fetch('https://gigachat.devices.sberbank.ru/api/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
       body: JSON.stringify({
         model: 'GigaChat',
         messages: [
@@ -81,15 +67,9 @@ app.post('/ask', async (req, res) => {
       })
     });
 
-    if (!r.ok) {
-      const errText = await r.text();
-      throw new Error('GigaChat ' + r.status + ': ' + errText.slice(0, 200));
-    }
-
+    if (!r.ok) { const errText = await r.text(); throw new Error('GigaChat ' + r.status + ': ' + errText.slice(0, 200)); }
     const data = await r.json();
-    const answer = data.choices?.[0]?.message?.content || 'Не удалось получить ответ';
-    res.json({ answer });
-
+    res.json({ answer: data.choices?.[0]?.message?.content || 'Не удалось ответить' });
   } catch (e) {
     console.error('[ask]', e.message);
     res.status(500).json({ error: e.message });
@@ -97,7 +77,7 @@ app.post('/ask', async (req, res) => {
 });
 
 // ============================================================
-//  ПОГОДА — Яндекс.Погода GraphQL API
+//  ПОГОДА — Яндекс GraphQL (только доступные поля)
 // ============================================================
 app.get('/weather', async (req, res) => {
   try {
@@ -106,7 +86,6 @@ app.get('/weather', async (req, res) => {
         weatherByPoint(request: { lat: 58.521, lon: 31.271 }) {
           now {
             temperature
-            feelsLike
             condition
             windSpeed
             humidity
@@ -129,42 +108,26 @@ app.get('/weather', async (req, res) => {
     console.log('[Yandex] Body:', text.slice(0, 300));
 
     let data;
-    try {
-      data = JSON.parse(text);
-    } catch(e) {
-      throw new Error('Yandex вернул не-JSON (status ' + r.status + ')');
-    }
+    try { data = JSON.parse(text); }
+    catch(e) { throw new Error('Yandex вернул не-JSON (status ' + r.status + ')'); }
 
-    if (data.errors) {
-      throw new Error('GraphQL ошибка: ' + JSON.stringify(data.errors).slice(0, 300));
-    }
-
-    if (!data.data || !data.data.weatherByPoint || !data.data.weatherByPoint.now) {
-      throw new Error('Нет weatherByPoint.now в ответе');
-    }
+    if (data.errors) throw new Error('GraphQL: ' + JSON.stringify(data.errors).slice(0, 200));
+    if (!data.data || !data.data.weatherByPoint || !data.data.weatherByPoint.now) throw new Error('Нет weatherByPoint.now');
 
     const now = data.data.weatherByPoint.now;
     res.json({
       temp: now.temperature,
-      feels: now.feelsLike,
       code: now.condition,
       wind: now.windSpeed,
       humidity: now.humidity
     });
-
   } catch (e) {
     console.error('Weather error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ============================================================
-//  ПРОВЕРКА РАБОТЫ
-// ============================================================
 app.get('/', (req, res) => res.send('OK'));
 
-// ============================================================
-//  ЗАПУСК
-// ============================================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => console.log('Started on port ' + PORT));
